@@ -3,3 +3,4 @@ dist
 .netlify
 .claude
 .env
+bot/data

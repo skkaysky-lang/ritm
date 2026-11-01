@@ -75,6 +75,15 @@ export function pushBack(fn: () => void): () => void {
   };
 }
 
+export const BOT_USERNAME = 'ritmapp1bot';
+
+/** Открывает чат с ботом на экране настройки напоминаний */
+export function openReminders() {
+  const url = `https://t.me/${BOT_USERNAME}?start=reminders`;
+  if (atLeast('6.1')) tg.openTelegramLink(url);
+  else window.open(url, '_blank');
+}
+
 export async function confirmDialog(text: string): Promise<boolean> {
   if (atLeast('6.2')) {
     return new Promise((res) => tg.showConfirm(text, (ok: boolean) => res(ok)));

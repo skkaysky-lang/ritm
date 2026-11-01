@@ -34,13 +34,26 @@ const DESCRIPTION = `🌙 Ритм — твой помощник для здор
 
 Нажми «Открыть Ритм» внизу, чтобы начать 👇`;
 
-const steps = [
+const onlyCommands = process.argv.includes('--commands');
+const allSteps = [
   ['Имя', () => api('setMyName', { name: NAME })],
   ['Короткое описание (в профиле)', () => api('setMyShortDescription', { short_description: SHORT })],
   ['Описание (в пустом чате)', () => api('setMyDescription', { description: DESCRIPTION })],
   ['Кнопка меню', () => api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Открыть Ритм', web_app: { url: APP_URL } } })],
+  [
+    'Команды',
+    () =>
+      api('setMyCommands', {
+        commands: [
+          { command: 'start', description: 'Начать' },
+          { command: 'reminders', description: 'Напоминания' },
+          { command: 'help', description: 'Как пользоваться' },
+        ],
+      }),
+  ],
 ];
 
+const steps = onlyCommands ? allSteps.filter(([l]) => l === 'Команды') : allSteps;
 const me = await api('getMe');
 console.log(`Бот: @${me.username}\n`);
 for (const [label, fn] of steps) {

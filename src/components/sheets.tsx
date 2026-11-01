@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { pickData, useStore, type Profile, type SleepEntry } from '../store';
 import { ACTIVITY, currentWeight, fmtNum, stepsKcal, stepsKm, targets } from '../lib/calc';
 import { addDays, dayKey, fmtDur, fmtTime, humanDay, parseHM } from '../lib/date';
-import { confirmDialog, haptic } from '../lib/telegram';
+import { confirmDialog, haptic, openReminders } from '../lib/telegram';
 import { Icon } from './Icon';
 import { NumInput, Segmented, Sheet, Stepper, TimeField, Toggle, toast } from './ui';
 import { applyTheme, readThemePref, type ThemePref } from '../lib/theme';
@@ -484,6 +484,16 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
             <NumInput value={p.stepGoal} onChange={(v) => v && upd({ stepGoal: v })} suffix="шагов" />
           </div>
         </div>
+
+        <div className="section-title">Напоминания</div>
+        <button className="card tap row" style={{ textAlign: 'left' }} onClick={() => (haptic.light(), openReminders())}>
+          <div className="emoji-box">🔔</div>
+          <div className="grow">
+            <div className="bold">Напоминания в боте</div>
+            <div className="small muted">Отбой, утро, еда, привычки, вода и итоги недели</div>
+          </div>
+          <Icon name="right" className="faint" />
+        </button>
 
         <div className="section-title">Оформление</div>
         <Segmented
