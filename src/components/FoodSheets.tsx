@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore, type Food, type FoodEntry, type Macros, type Meal } from '../store';
-import { FOOD_EMOJI, FOODS, searchFoods } from '../data/foods';
+import { CATEGORIES, FOOD_EMOJI, FOODS, POPULAR, searchFoods } from '../data/foods';
+import { isBarcode, searchOnline } from '../lib/off';
 import { round1, scaleMacros, sumMacros } from '../lib/calc';
 import { addDays, dayKey, lastDays } from '../lib/date';
 import { haptic } from '../lib/telegram';
@@ -59,6 +60,28 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
   const [picked, setPicked] = useState<Food | null>(null);
   const [added, setAdded] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [cat, setCat] = useState<string>('popular');
+  const [online, setOnline] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; items: Food[] }>({ state: 'idle', items: [] });
+
+  // Онлайн-поиск по магазинным товарам — с паузой, чтобы не дёргать сеть на каждую букву
+  useEffect(() => {
+    const qq = q.trim();
+    if (qq.length < 3) {
+      setOnline({ state: 'idle', items: [] });
+      return;
+    }
+    const ctrl = new AbortController();
+    setOnline({ state: 'loading', items: [] });
+    const t = setTimeout(() => {
+      searchOnline(qq, ctrl.signal)
+        .then((items) => setOnline({ state: 'done', items }))
+        .catch((e) => e.name !== 'AbortError' && setOnline({ state: 'error', items: [] }));
+    }, 450);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [q]);
 
   // при каждом открытии — сброс
   const [lastOpen, setLastOpen] = useState(false);
@@ -71,6 +94,7 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
       setPicked(null);
       setAdded(0);
       setCreating(false);
+      setCat('popular');
     }
   }
 
@@ -93,7 +117,8 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
     return out;
   }, [s.food, byId]);
 
-  const results = useMemo(() => (q ? searchFoods(all, q).slice(0, 40) : []), [q, all]);
+  const results = useMemo(() => (q && !isBarcode(q) ? searchFoods(all, q).slice(0, 30) : []), [q, all]);
+  const browse = cat === 'popular' ? POPULAR : FOODS.filter((f) => f.cat === cat);
   const favs = s.favorites.map((id) => byId.get(id)).filter(Boolean) as Food[];
 
   const add = (e: Omit<FoodEntry, 'id' | 'time' | 'meal'>) => {
@@ -106,13 +131,14 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
 
   const FoodRow = ({ f }: { f: Food }) => {
     const fav = s.favorites.includes(f.id);
-    const canFav = !f.id.startsWith('r_');
+    const canFav = !f.id.startsWith('r_') && !f.id.startsWith('off_');
     return (
       <div className="list-item">
         <button className="row grow" style={{ textAlign: 'left' }} onClick={() => (haptic.light(), setPicked(f))}>
           <div className="emoji-box sm">{f.emoji}</div>
           <div className="grow">
             <div className="bold ellipsis">{f.name}</div>
+            {f.brand && <div className="tiny faint bold ellipsis">{f.brand}</div>}
             <div className="tiny muted num">
               {Math.round(f.kcal)} ккал · Б {round1(f.p)} Ж {round1(f.f)} У {round1(f.c)} {f.unit?.name === 'порция' ? 'на порцию' : 'на 100 г'}
             </div>
@@ -172,22 +198,51 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
                 <span className="prefix">
                   <Icon name="search" size={19} />
                 </span>
-                <input className="input" placeholder="Гречка, банан, кофе…" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input className="input" placeholder="Название или штрихкод" value={q} onChange={(e) => setQ(e.target.value)} />
+                {q && (
+                  <button className="icon-btn sm plain faint" style={{ position: 'absolute', right: 6, top: 8 }} onClick={() => setQ('')} aria-label="Очистить">
+                    <Icon name="close" size={16} />
+                  </button>
+                )}
               </div>
               {q ? (
-                results.length ? (
-                  <div className="list">
-                    {results.map((f) => (
-                      <FoodRow key={f.id} f={f} />
-                    ))}
-                  </div>
-                ) : (
-                  <Empty emoji="🔎" text={`«${q}» нет в базе`}>
-                    <button className="btn sm" onClick={() => setTab('manual')}>
-                      Ввести КБЖУ вручную
+                <>
+                  {results.length > 0 && (
+                    <div className="list">
+                      {results.map((f) => (
+                        <FoodRow key={f.id} f={f} />
+                      ))}
+                    </div>
+                  )}
+                  {online.state !== 'idle' && (
+                    <>
+                      <div className="row-between">
+                        <div className="section-title">🛒 Товары из магазинов</div>
+                        {online.state === 'loading' && <span className="tiny faint bold pulse" style={{ marginTop: 10 }}>ищу…</span>}
+                      </div>
+                      {online.state === 'error' && <div className="small muted" style={{ padding: '4px 4px 0' }}>Онлайн-база сейчас недоступна. Проверь интернет.</div>}
+                      {online.state === 'done' && !online.items.length && <div className="small muted" style={{ padding: '4px 4px 0' }}>{isBarcode(q) ? 'Товар с таким штрихкодом не найден.' : 'В магазинной базе ничего не нашлось.'}</div>}
+                      {online.items.length > 0 && (
+                        <div className="list">
+                          {online.items.map((f) => (
+                            <FoodRow key={f.id} f={f} />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {!results.length && online.state !== 'loading' && !online.items.length ? (
+                    <Empty emoji="🔎" text={`«${q}» не нашлось`}>
+                      <button className="btn sm" onClick={() => setTab('manual')}>
+                        Ввести КБЖУ вручную
+                      </button>
+                    </Empty>
+                  ) : (
+                    <button className="link center" style={{ padding: '10px 0' }} onClick={() => setTab('manual')}>
+                      Не нашёл? Ввести КБЖУ вручную
                     </button>
-                  </Empty>
-                )
+                  )}
+                </>
               ) : (
                 <>
                   {recents.length > 0 && (
@@ -200,11 +255,24 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
                       </div>
                     </>
                   )}
-                  <div className="section-title">Популярное</div>
+                  <div className="section-title">Каталог · {FOODS.length} продуктов и блюд</div>
+                  <div className="chips">
+                    <button className={`chip ${cat === 'popular' ? 'on' : ''}`} onClick={() => (haptic.select(), setCat('popular'))}>
+                      ⭐ Популярное
+                    </button>
+                    {CATEGORIES.map((c) => (
+                      <button key={c.id} className={`chip ${cat === c.id ? 'on' : ''}`} onClick={() => (haptic.select(), setCat(c.id))}>
+                        {c.emoji} {c.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="list">
-                    {FOODS.slice(0, 40).map((f) => (
+                    {browse.map((f) => (
                       <FoodRow key={f.id} f={f} />
                     ))}
+                  </div>
+                  <div className="tiny faint center" style={{ padding: '6px 0' }}>
+                    Ищешь товар из магазина? Введи название или штрихкод с упаковки — найду в онлайн-базе Open Food Facts.
                   </div>
                 </>
               )}
@@ -321,6 +389,7 @@ function PortionView({ food, meal, onBack, onAdd }: { food: Food; meal: Meal; on
           <div className="bold" style={{ fontSize: 18 }}>
             {food.name}
           </div>
+          {food.brand && <div className="small faint bold">{food.brand}</div>}
           <div className="small muted">{isPortion ? 'на порцию' : `${Math.round(food.kcal)} ккал на 100 г`}</div>
         </div>
       </div>

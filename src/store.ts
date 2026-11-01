@@ -52,6 +52,8 @@ export interface Food extends Macros {
   emoji: string;
   unit?: { name: string; grams: number };
   custom?: boolean;
+  cat?: string;
+  brand?: string;
 }
 
 export interface TemplateItem extends Macros {
