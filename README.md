@@ -9,16 +9,22 @@ npm run dev
 
 Открой http://localhost:5173. Вне Telegram всё работает, кроме вибрации и облачной синхронизации.
 
-## Как подключить к Telegram
+## Где живёт приложение
 
-1. **Собрать приложение:** `npm run build`, готовые файлы будут в папке `dist`.
-2. **Выложить `dist` на любой хостинг с HTTPS** (Telegram требует https):
-   - самый простой вариант — перетащить папку `dist` на https://app.netlify.com/drop;
-   - или GitHub Pages / Vercel / Cloudflare Pages.
-3. **Создать бота:** в Telegram открой @BotFather → `/newbot` → придумай имя.
-4. **Привязать приложение:** в @BotFather выбери `/mybots` → свой бот → *Bot Settings* → *Menu Button* → вставь ссылку с хостинга.
-   Можно ещё сделать `/newapp`, тогда у приложения будет своя ссылка вида `t.me/твой_бот/app`.
-5. Открой бота и нажми кнопку меню. Готово.
+**https://skkaysky-lang.github.io/ritm/** (GitHub Pages, ветка `gh-pages`).
+
+Выложить новую версию:
+
+```bash
+npm run deploy
+```
+
+Скрипт соберёт приложение и отправит его в ветку `gh-pages`. Через минуту обновится и в Telegram.
+
+## Как подключено к Telegram
+
+@BotFather → `/mybots` → бот → *Bot Settings* → *Menu Button* → ссылка `https://skkaysky-lang.github.io/ritm/`.
+Можно ещё сделать `/newapp`, тогда у приложения будет своя ссылка вида `t.me/твой_бот/app`.
 
 ## Что внутри
 
