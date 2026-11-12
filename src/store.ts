@@ -75,6 +75,7 @@ export interface SleepEntry {
   start: number;
   end: number;
   quality: number; // 0 — без оценки, 1…5
+  nap?: boolean; // дневной сон
 }
 
 export interface Habit {
@@ -117,6 +118,55 @@ export interface Fast {
   goal: number; // часов
 }
 
+/* ---------- финансы ---------- */
+
+export interface Txn {
+  id: string;
+  type: 'exp' | 'inc';
+  amount: number;
+  cat: string;
+  note?: string;
+  day: string;
+  time: number;
+}
+
+/** Копилка */
+export interface Pot {
+  id: string;
+  name: string;
+  emoji: string;
+  target: number;
+  saved: number;
+  deadline?: string;
+  createdAt: number;
+}
+
+/** Регулярный платёж (подписка, аренда, кредит) */
+export interface Sub {
+  id: string;
+  name: string;
+  emoji: string;
+  amount: number;
+  dom: number; // день месяца
+  cat: string;
+  lastPaid?: string; // YYYY-MM
+}
+
+export interface FinCat {
+  id: string;
+  label: string;
+  emoji: string;
+  type: 'exp' | 'inc';
+  color: string;
+}
+
+export interface Fin {
+  currency: string;
+  budget: number | null; // лимит расходов на месяц
+  catBudgets: Record<string, number>;
+  customCats: FinCat[];
+}
+
 export interface Data {
   onboarded: boolean;
   profile: Profile;
@@ -136,6 +186,12 @@ export interface Data {
   fastStart: number | null;
   fastGoal: number;
   fasts: Fast[];
+  sleepKind: 'night' | 'nap';
+  napTarget: number | null; // минут, для таймера дневного сна
+  txns: Txn[];
+  pots: Pot[];
+  subs: Sub[];
+  fin: Fin;
 }
 
 export const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
@@ -178,6 +234,12 @@ const initialData: Data = {
   fastStart: null,
   fastGoal: 16,
   fasts: [],
+  sleepKind: 'night',
+  napTarget: null,
+  txns: [],
+  pots: [],
+  subs: [],
+  fin: { currency: '₽', budget: null, catBudgets: {}, customCats: [] },
 };
 
 /* ===================== Действия ===================== */
@@ -194,6 +256,7 @@ interface Actions {
   addCustomFood: (f: Omit<Food, 'id' | 'custom'>) => string;
   removeCustomFood: (id: string) => void;
   toggleFavorite: (id: string) => void;
+  saveFood: (f: Food) => void;
   saveTemplate: (name: string, emoji: string, items: TemplateItem[]) => void;
   removeTemplate: (id: string) => void;
   applyTemplate: (day: string, meal: Meal, id: string) => void;
@@ -204,7 +267,7 @@ interface Actions {
   removeWeight: (day: string) => void;
   setMood: (day: string, v: number) => void;
 
-  startSleep: (at?: number) => void;
+  startSleep: (at?: number, kind?: 'night' | 'nap', target?: number | null) => void;
   cancelSleep: () => void;
   endSleep: (at?: number) => string | null;
   addSleep: (e: Omit<SleepEntry, 'id'>) => string;
@@ -226,6 +289,23 @@ interface Actions {
   startFast: (hours: number, at?: number) => void;
   endFast: () => Fast | null;
   cancelFast: () => void;
+
+  addTxn: (t: Omit<Txn, 'id' | 'time'>) => string;
+  updateTxn: (id: string, patch: Partial<Txn>) => void;
+  removeTxn: (id: string) => Txn | undefined;
+  restoreTxn: (t: Txn) => void;
+  addPot: (p: Omit<Pot, 'id' | 'createdAt' | 'saved'>) => void;
+  updatePot: (id: string, patch: Partial<Pot>) => void;
+  removePot: (id: string) => void;
+  movePot: (id: string, delta: number) => void;
+  addSub: (s: Omit<Sub, 'id'>) => void;
+  updateSub: (id: string, patch: Partial<Sub>) => void;
+  removeSub: (id: string) => void;
+  paySub: (id: string, day: string) => void;
+  setFin: (patch: Partial<Fin>) => void;
+  setCatBudget: (cat: string, limit: number | null) => void;
+  addFinCat: (c: Omit<FinCat, 'id'>) => string;
+  removeFinCat: (id: string) => void;
 
   importData: (d: Partial<Data>) => void;
   resetAll: () => void;
@@ -293,6 +373,12 @@ export const useStore = create<State>()(
         set((s) => {
           s.favorites = s.favorites.includes(id) ? s.favorites.filter((x) => x !== id) : [id, ...s.favorites];
         }),
+      saveFood: (f) =>
+        set((s) => {
+          // товар из онлайн-базы сохраняем к себе, чтобы он остался в избранном
+          if (!s.customFoods.some((x) => x.id === f.id)) s.customFoods.unshift({ ...f, custom: true });
+          if (!s.favorites.includes(f.id)) s.favorites.unshift(f.id);
+        }),
       saveTemplate: (name, emoji, items) =>
         set((s) => {
           s.templates.unshift({ id: uid(), name, emoji, items });
@@ -333,22 +419,29 @@ export const useStore = create<State>()(
         }),
 
       /* --- сон --- */
-      startSleep: (at) =>
+      startSleep: (at, kind = 'night', target = null) =>
         set((s) => {
           s.sleepStart = at ?? Date.now();
+          s.sleepKind = kind;
+          s.napTarget = kind === 'nap' ? target : null;
         }),
       cancelSleep: () =>
         set((s) => {
           s.sleepStart = null;
+          s.sleepKind = 'night';
+          s.napTarget = null;
         }),
       endSleep: (at) => {
         const start = get().sleepStart;
         if (!start) return null;
         const end = at ?? Date.now();
         const id = uid();
+        const nap = get().sleepKind === 'nap';
         set((s) => {
           s.sleepStart = null;
-          if (end - start > 5 * 60_000) s.sleeps.push({ id, start, end, quality: 0 });
+          s.sleepKind = 'night';
+          s.napTarget = null;
+          if (end - start > 5 * 60_000) s.sleeps.push({ id, start, end, quality: 0, nap });
         });
         return end - start > 5 * 60_000 ? id : null;
       },
@@ -443,7 +536,87 @@ export const useStore = create<State>()(
           s.fastStart = null;
         }),
 
-      importData: (d) => set(() => ({ ...initialData, ...d })),
+      /* --- финансы --- */
+      addTxn: (t) => {
+        const id = uid();
+        set((s) => {
+          s.txns.push({ ...t, amount: Math.round(t.amount * 100) / 100, id, time: Date.now() });
+        });
+        return id;
+      },
+      updateTxn: (id, patch) =>
+        set((s) => {
+          const it = s.txns.find((x) => x.id === id);
+          if (it) Object.assign(it, patch);
+        }),
+      removeTxn: (id) => {
+        const it = get().txns.find((x) => x.id === id);
+        set((s) => {
+          s.txns = s.txns.filter((x) => x.id !== id);
+        });
+        return it ? { ...it } : undefined;
+      },
+      restoreTxn: (t) =>
+        set((s) => {
+          s.txns.push(t);
+        }),
+      addPot: (p) =>
+        set((s) => {
+          s.pots.push({ ...p, id: uid(), saved: 0, createdAt: Date.now() });
+        }),
+      updatePot: (id, patch) =>
+        set((s) => {
+          const it = s.pots.find((x) => x.id === id);
+          if (it) Object.assign(it, patch);
+        }),
+      removePot: (id) =>
+        set((s) => {
+          s.pots = s.pots.filter((x) => x.id !== id);
+        }),
+      movePot: (id, delta) =>
+        set((s) => {
+          const it = s.pots.find((x) => x.id === id);
+          if (it) it.saved = Math.max(0, Math.round((it.saved + delta) * 100) / 100);
+        }),
+      addSub: (sub) =>
+        set((s) => {
+          s.subs.push({ ...sub, id: uid() });
+        }),
+      updateSub: (id, patch) =>
+        set((s) => {
+          const it = s.subs.find((x) => x.id === id);
+          if (it) Object.assign(it, patch);
+        }),
+      removeSub: (id) =>
+        set((s) => {
+          s.subs = s.subs.filter((x) => x.id !== id);
+        }),
+      paySub: (id, day) =>
+        set((s) => {
+          const it = s.subs.find((x) => x.id === id);
+          if (!it) return;
+          it.lastPaid = day.slice(0, 7);
+          s.txns.push({ id: uid(), type: 'exp', amount: it.amount, cat: it.cat, note: it.name, day, time: Date.now() });
+        }),
+      setFin: (patch) => set((s) => void Object.assign(s.fin, patch)),
+      setCatBudget: (cat, limit) =>
+        set((s) => {
+          if (limit && limit > 0) s.fin.catBudgets[cat] = limit;
+          else delete s.fin.catBudgets[cat];
+        }),
+      addFinCat: (c) => {
+        const id = 'u_' + uid();
+        set((s) => {
+          s.fin.customCats.push({ ...c, id });
+        });
+        return id;
+      },
+      removeFinCat: (id) =>
+        set((s) => {
+          s.fin.customCats = s.fin.customCats.filter((c) => c.id !== id);
+        }),
+
+      importData: (d) => set(() => ({ ...initialData, ...d, fin: { ...initialData.fin, ...(d.fin ?? {}) } })),
       resetAll: () => set(() => ({ ...initialData })),
     })),
     { name: 'ritm-v1', version: 1 },

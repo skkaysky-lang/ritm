@@ -36,7 +36,7 @@ export function WaterCard({ day, compact }: { day: string; compact?: boolean }) 
           <span className="tiny faint bold num">{Math.round(v * 100)}%</span>
         </div>
         <div className="row" style={{ gap: 12 }}>
-          <div className="glass" style={{ width: 34, height: 46 }}>
+          <div className="wglass" style={{ width: 34, height: 46 }}>
             <i style={{ height: `${v * 100}%` }} />
           </div>
           <div className="stat">
@@ -61,7 +61,7 @@ export function WaterCard({ day, compact }: { day: string; compact?: boolean }) 
   return (
     <div className="card">
       <div className="row" style={{ gap: 16 }}>
-        <div className="glass">
+        <div className="wglass">
           <i style={{ height: `${v * 100}%` }} />
         </div>
         <div className="grow">

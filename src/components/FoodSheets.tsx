@@ -117,7 +117,7 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
     return out;
   }, [s.food, byId]);
 
-  const results = useMemo(() => (q && !isBarcode(q) ? searchFoods(all, q).slice(0, 30) : []), [q, all]);
+  const results = useMemo(() => (q && !isBarcode(q) ? searchFoods(all, q).slice(0, 40) : []), [q, all]);
   const browse = cat === 'popular' ? POPULAR : FOODS.filter((f) => f.cat === cat);
   const favs = s.favorites.map((id) => byId.get(id)).filter(Boolean) as Food[];
 
@@ -131,7 +131,7 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
 
   const FoodRow = ({ f }: { f: Food }) => {
     const fav = s.favorites.includes(f.id);
-    const canFav = !f.id.startsWith('r_') && !f.id.startsWith('off_');
+    const canFav = !f.id.startsWith('r_');
     return (
       <div className="list-item">
         <button className="row grow" style={{ textAlign: 'left' }} onClick={() => (haptic.light(), setPicked(f))}>
@@ -145,7 +145,7 @@ export function AddFoodSheet({ open, onClose, day, meal: initialMeal }: { open: 
           </div>
         </button>
         {canFav && (
-          <button className="icon-btn sm plain" onClick={() => (haptic.select(), s.toggleFavorite(f.id))} style={{ color: fav ? 'var(--warn)' : 'var(--text-3)' }} aria-label="Избранное">
+          <button className="icon-btn sm plain" onClick={() => (haptic.select(), f.id.startsWith('off_') && !fav ? (s.saveFood(f), toast('⭐ Сохранил в избранное')) : s.toggleFavorite(f.id))} style={{ color: fav ? 'var(--warn)' : 'var(--text-3)' }} aria-label="Избранное">
             <Icon name={fav ? 'star-fill' : 'star'} size={19} />
           </button>
         )}

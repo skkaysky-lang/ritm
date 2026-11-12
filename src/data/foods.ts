@@ -1,4 +1,5 @@
 import type { Food } from '../store';
+import { EXTRA, type Row } from './foods2';
 
 /* Встроенная база: КБЖУ на 100 г (средние табличные значения).
    Формат строки: [название, эмодзи, ккал, белки, жиры, углеводы, штука?, id?]
@@ -6,8 +7,6 @@ import type { Food } from '../store';
    ВАЖНО: новые продукты добавляй только в КОНЕЦ категории, чтобы не сбить id
    у тех, что уже в избранном у пользователей. */
 
-type Unit = [name: string, grams: number];
-type Row = [name: string, emoji: string, kcal: number, p: number, f: number, c: number, unit?: Unit | 0, id?: string];
 
 export const CATEGORIES = [
   { id: 'grain', label: 'Крупы и гарниры', emoji: '🍚' },
@@ -28,6 +27,10 @@ export const CATEGORIES = [
   { id: 'alco', label: 'Алкоголь', emoji: '🍷' },
   { id: 'sauce', label: 'Соусы и масла', emoji: '🥫' },
   { id: 'sport', label: 'Спортпит', emoji: '💪' },
+  { id: 'world', label: 'Кухни мира', emoji: '🌍' },
+  { id: 'semi', label: 'Полуфабрикаты', emoji: '🧊' },
+  { id: 'canned', label: 'Консервы и соленья', emoji: '🫙' },
+  { id: 'brand', label: 'Известные марки', emoji: '🏷️' },
 ] as const;
 
 const DB: Record<(typeof CATEGORIES)[number]['id'], Row[]> = {
@@ -510,10 +513,15 @@ const DB: Record<(typeof CATEGORIES)[number]['id'], Row[]> = {
     ['Протеиновое печенье', '🍪', 400, 30, 15, 35, ['шт', 60]],
     ['Изотоник', '🥤', 25, 0, 0, 6, ['бутылка', 500]],
   ],
+  // эти категории целиком лежат в foods2.ts
+  world: [],
+  semi: [],
+  canned: [],
+  brand: [],
 };
 
 export const FOODS: Food[] = CATEGORIES.flatMap(({ id: cat }) =>
-  DB[cat].map(([name, emoji, kcal, p, f, c, unit, id], i) => ({
+  [...DB[cat], ...(EXTRA[cat] ?? [])].map(([name, emoji, kcal, p, f, c, unit, id], i) => ({
     id: id ?? `${cat}${i}`,
     name,
     emoji,
@@ -537,20 +545,93 @@ export const POPULAR: Food[] = POPULAR_IDS.map((id) => FOODS.find((f) => f.id ==
 
 export const FOOD_EMOJI = ['🍽️', '🥗', '🍲', '🍗', '🥩', '🐟', '🍳', '🥣', '🍝', '🍕', '🍔', '🥪', '🌯', '🍣', '🥟', '🍎', '🍌', '🥛', '🧀', '🍫', '🍪', '☕', '🥤', '🍺'];
 
-const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
+const norm = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[«»"().,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Разговорные и русские названия → как записано в базе */
+const ALIASES: Record<string, string> = {
+  картошка: 'картофель',
+  картоха: 'картофель',
+  пюрешка: 'пюре',
+  греча: 'гречка',
+  кура: 'курица',
+  томат: 'помидор',
+  томаты: 'помидор',
+  макарошки: 'макароны',
+  геркулес: 'овсян',
+  шава: 'шаурма',
+  шаверма: 'шаурма',
+  пепси: 'кола',
+  'кока-кола': 'кола',
+  яйца: 'яйц',
+  сникерс: 'snickers',
+  твикс: 'twix',
+  марс: 'mars',
+  баунти: 'bounty',
+  орео: 'oreo',
+  нутелла: 'nutella',
+  киткат: 'kitkat',
+  киндер: 'kinder',
+  рафаэлло: 'raffaello',
+  лейс: "lay's",
+  принглс: 'pringles',
+  читос: 'cheetos',
+  редбул: 'red',
+  милка: 'milka',
+  скитлс: 'skittles',
+  актимель: 'actimel',
+  монстр: 'monster',
+};
+
+/** Основа слова: отрезаем окончание, чтобы по «гречку» находилась «гречка» */
+function stem(w: string): string {
+  return w.length <= 4 ? w : w.slice(0, Math.max(4, w.length - 2));
+}
+
+const index = new WeakMap<Food, { name: string; words: string[] }>();
+function entry(f: Food) {
+  let e = index.get(f);
+  if (!e) {
+    const name = norm(f.name + (f.brand ? ' ' + f.brand : ''));
+    e = { name, words: name.split(' ') };
+    index.set(f, e);
+  }
+  return e;
+}
 
 export function searchFoods(list: Food[], q: string): Food[] {
   const n = norm(q);
   if (!n) return list;
-  const words = n.split(/\s+/);
-  return list
-    .map((f) => {
-      const name = norm(f.name + (f.brand ? ' ' + f.brand : ''));
-      if (!words.every((w) => name.includes(w))) return null;
-      const score = name.startsWith(n) ? 0 : name.split(/[\s(]+/).some((w) => w.startsWith(words[0])) ? 1 : 2;
-      return { f, score: score * 1000 + f.name.length };
-    })
-    .filter((x): x is { f: Food; score: number } => !!x)
-    .sort((a, b) => a.score - b.score)
-    .map((x) => x.f);
+  const words = n.split(' ').map((w) => ALIASES[w] ?? w);
+  const stems = words.map(stem);
+  const out: { f: Food; score: number }[] = [];
+  for (const f of list) {
+    const e = entry(f);
+    let score = 0;
+    let ok = true;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      if (e.words.some((x) => x.startsWith(w))) continue; // слово начинается так же
+      if (e.name.includes(w)) {
+        score += 1; // совпадение внутри слова
+        continue;
+      }
+      if (e.words.some((x) => x.startsWith(stems[i]))) {
+        score += 2; // совпала основа: «гречку» → «гречка»
+        continue;
+      }
+      ok = false;
+      break;
+    }
+    if (!ok) continue;
+    if (e.words[0].startsWith(stems[0])) score -= 3; // название начинается с запроса
+    if (e.name === n) score -= 5;
+    out.push({ f, score: score * 1000 + e.name.length });
+  }
+  return out.sort((a, b) => a.score - b.score).map((x) => x.f);
 }

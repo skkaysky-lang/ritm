@@ -36,6 +36,7 @@ const P: Record<string, string> = {
   timer: 'M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4M10 2h4',
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01',
   bell: 'M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9zM10 20a2 2 0 0 0 4 0',
+  wallet: 'M3 7v10a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2zm0 0a2 2 0 0 1 2-2h12v4M16 14h.01',
 };
 
 export function Icon({ name, size = 22, stroke = 2, className, style }: { name: keyof typeof P | string; size?: number; stroke?: number; className?: string; style?: React.CSSProperties }) {

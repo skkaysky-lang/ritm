@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { pickData, useStore, type Profile, type SleepEntry } from '../store';
-import { ACTIVITY, currentWeight, fmtNum, stepsKcal, stepsKm, targets } from '../lib/calc';
+import { ACTIVITY, currentWeight, fmtNum, isNap, stepsKcal, stepsKm, targets } from '../lib/calc';
 import { addDays, dayKey, fmtDur, fmtTime, humanDay, parseHM } from '../lib/date';
 import { confirmDialog, haptic, openReminders } from '../lib/telegram';
 import { Icon } from './Icon';
@@ -166,12 +166,13 @@ export function WeightSheet({ open, onClose }: { open: boolean; onClose: () => v
 
 /* ===================== Сон: ручное добавление / правка ===================== */
 
-export function SleepEditSheet({ open, onClose, entry }: { open: boolean; onClose: () => void; entry?: SleepEntry | null }) {
+export function SleepEditSheet({ open, onClose, entry, nap: napDefault = false }: { open: boolean; onClose: () => void; entry?: SleepEntry | null; nap?: boolean }) {
   const s = useStore();
   const [bed, setBed] = useState('23:00');
   const [wake, setWake] = useState(s.profile.wakeTime);
   const [day, setDay] = useState(dayKey());
   const [quality, setQuality] = useState(0);
+  const [nap, setNap] = useState(false);
   const [was, setWas] = useState(false);
   if (open !== was) {
     setWas(open);
@@ -181,11 +182,20 @@ export function SleepEditSheet({ open, onClose, entry }: { open: boolean; onClos
         setWake(fmtTime(entry.end));
         setDay(dayKey(entry.end));
         setQuality(entry.quality);
+        setNap(isNap(entry));
+      } else if (napDefault) {
+        // дневной сон: по умолчанию «последние полчаса»
+        setBed(fmtTime(Date.now() - 30 * 60_000));
+        setWake(fmtTime(Date.now()));
+        setDay(dayKey());
+        setQuality(0);
+        setNap(true);
       } else {
         setBed('23:00');
         setWake(s.profile.wakeTime);
         setDay(dayKey());
         setQuality(0);
+        setNap(false);
       }
     }
   }
@@ -198,8 +208,16 @@ export function SleepEditSheet({ open, onClose, entry }: { open: boolean; onClos
   return (
     <Sheet open={open} onClose={onClose} title={entry ? 'Изменить сон' : 'Добавить сон'}>
       <div className="stack">
+        <Segmented
+          value={nap ? 'nap' : 'night'}
+          onChange={(v) => setNap(v === 'nap')}
+          options={[
+            { v: 'night', label: '🌙 Ночной' },
+            { v: 'nap', label: '😴 Дневной' },
+          ]}
+        />
         <div className="field">
-          <label>Утро пробуждения</label>
+          <label>{nap ? 'День' : 'Утро пробуждения'}</label>
           <div className="chips">
             {[0, -1, -2, -3, -4, -5, -6].map((i) => {
               const k = addDays(dayKey(), i);
@@ -212,7 +230,7 @@ export function SleepEditSheet({ open, onClose, entry }: { open: boolean; onClos
           </div>
         </div>
         <div className="grid-2">
-          <TimeField label="🌙 Лёг" value={bed} onChange={setBed} />
+          <TimeField label={nap ? '😴 Уснул' : '🌙 Лёг'} value={bed} onChange={setBed} />
           <TimeField label="☀️ Встал" value={wake} onChange={setWake} />
         </div>
         <div className="card center" style={{ background: 'var(--surface-2)', padding: 12 }}>
@@ -244,8 +262,8 @@ export function SleepEditSheet({ open, onClose, entry }: { open: boolean; onClos
             style={{ ['--c1' as string]: 'var(--sleep)', ['--c2' as string]: 'var(--sleep-2)' }}
             disabled={dur < 10 || dur > 20 * 60}
             onClick={() => {
-              if (entry) s.updateSleep(entry.id, { start: startMs, end: wakeMs, quality });
-              else s.addSleep({ start: startMs, end: wakeMs, quality });
+              if (entry) s.updateSleep(entry.id, { start: startMs, end: wakeMs, quality, nap });
+              else s.addSleep({ start: startMs, end: wakeMs, quality, nap });
               haptic.success();
               onClose();
             }}
@@ -559,6 +577,65 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
         </div>
         <div className="center tiny faint" style={{ margin: '8px 0' }}>
           Ритм · v0.1
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+/* ===================== Дневной сон: выбор длительности ===================== */
+
+const NAPS = [
+  { m: 20, title: 'Заряд бодрости', hint: 'Лёгкий сон: встаёшь свежим, без вялости', best: true },
+  { m: 30, title: 'Короткий отдых', hint: 'Чуть глубже, после может быть лёгкая сонливость', best: false },
+  { m: 60, title: 'Глубокий сон', hint: 'Полезно для памяти, но вставать тяжелее', best: false },
+  { m: 90, title: 'Полный цикл', hint: 'Как маленькая ночь: просыпаешься в лёгкой фазе', best: true },
+];
+
+export function NapSheet({ open, onClose, onManual }: { open: boolean; onClose: () => void; onManual: () => void }) {
+  const s = useStore();
+  const late = new Date().getHours() >= 16;
+  const start = (m: number | null) => {
+    s.startSleep(undefined, 'nap', m);
+    haptic.medium();
+    toast(m ? `😴 Сладких снов! Подъём в ${fmtTime(Date.now() + m * 60_000)}` : '😴 Сладких снов! Нажми «Проснулся», когда встанешь');
+    onClose();
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="Дневной сон">
+      <div className="stack">
+        <div className="small muted">Выбери, сколько хочешь поспать. Я покажу таймер, а сон добавится к сегодняшнему дню.</div>
+        {late && <div className="badge warn" style={{ alignSelf: 'flex-start', whiteSpace: 'normal' }}>⚠️ После 16:00 долгий сон может помешать уснуть вечером</div>}
+        <div className="stack-sm">
+          {NAPS.map((n) => (
+            <button key={n.m} className="choice" onClick={() => start(n.m)}>
+              <div className="num" style={{ fontSize: 22, fontWeight: 800, width: 62, textAlign: 'center' }}>
+                {n.m}
+                <span className="tiny muted"> мин</span>
+              </div>
+              <div className="grow">
+                <div className="bold">
+                  {n.title} {n.best && '⭐'}
+                </div>
+                <div className="tiny muted">{n.hint}</div>
+              </div>
+              <span className="tiny faint bold num">до {fmtTime(Date.now() + n.m * 60_000)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid-2">
+          <button className="btn ghost" onClick={() => start(null)}>
+            Без таймера
+          </button>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              onClose();
+              setTimeout(onManual, 220);
+            }}
+          >
+            Уже поспал
+          </button>
         </div>
       </div>
     </Sheet>

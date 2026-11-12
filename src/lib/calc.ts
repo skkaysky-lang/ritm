@@ -90,23 +90,42 @@ export function stepsMinutes(steps: number) {
 
 export const sleepMin = (s: SleepEntry) => (s.end - s.start) / 60_000;
 
-/** Основной сон для каждого дня пробуждения (самый длинный) + сумма с дневным сном */
-export function nightsByDay(sleeps: SleepEntry[]): Record<string, { main: SleepEntry; total: number }> {
-  const out: Record<string, { main: SleepEntry; total: number }> = {};
+/** Дневной сон: помечен явно, либо это короткий сон днём (для записей без пометки) */
+export function isNap(s: SleepEntry): boolean {
+  if (s.nap != null) return s.nap;
+  const h = new Date(s.start).getHours();
+  return sleepMin(s) < 180 && h >= 9 && h < 20;
+}
+
+export interface DaySleep {
+  main: SleepEntry | null; // основной ночной сон
+  naps: SleepEntry[];
+  night: number; // минут ночью
+  nap: number; // минут днём
+  total: number;
+}
+
+/** Сон по дням пробуждения: ночной (самый длинный — основной) и дневной отдельно */
+export function nightsByDay(sleeps: SleepEntry[]): Record<string, DaySleep> {
+  const out: Record<string, DaySleep> = {};
   for (const s of sleeps) {
-    const k = dayKey(s.end);
-    const cur = out[k];
-    if (!cur) out[k] = { main: s, total: sleepMin(s) };
-    else {
-      cur.total += sleepMin(s);
-      if (sleepMin(s) > sleepMin(cur.main)) cur.main = s;
+    const d = (out[dayKey(s.end)] ??= { main: null, naps: [], night: 0, nap: 0, total: 0 });
+    const m = sleepMin(s);
+    d.total += m;
+    if (isNap(s)) {
+      d.naps.push(s);
+      d.nap += m;
+    } else {
+      d.night += m;
+      if (!d.main || m > sleepMin(d.main)) d.main = s;
     }
   }
   return out;
 }
 
-export function sleepScore(s: SleepEntry, goalH: number): number {
-  const h = sleepMin(s) / 60;
+/** Оценка ночи 0–100. extraMin — дневной сон, он частично закрывает недосып. */
+export function sleepScore(s: SleepEntry, goalH: number, extraMin = 0): number {
+  const h = (sleepMin(s) + extraMin * 0.7) / 60;
   const diff = h - goalH;
   const dur = clamp(100 - (diff < 0 ? -diff * 22 : diff * 10), 0, 100);
   const q = s.quality ? ((s.quality - 1) / 4) * 100 : dur;
@@ -142,32 +161,41 @@ function std(arr: number[]) {
 
 export interface SleepStats {
   nights: number;
-  avg: number; // минут
+  avg: number; // минут в сутки, вместе с дневным сном
+  avgNight: number;
   debt: number; // минут за 7 дней
   consistency: number; // 0–100
   avgBed: number | null; // минут вечера
   avgWake: number | null;
   avgScore: number;
+  naps: number; // сколько раз спал днём за период
+  napAvg: number; // средняя длина дневного сна
 }
 
 export function sleepStats(d: Data, days = 7): SleepStats {
   const map = nightsByDay(d.sleeps);
-  const keys = lastDays(days).filter((k) => map[k]);
-  const mains = keys.map((k) => map[k].main);
+  const all = lastDays(days);
+  const keys = all.filter((k) => map[k]?.main);
+  const mains = keys.map((k) => map[k].main!);
   const goal = d.profile.sleepGoal * 60;
   const avg = keys.length ? keys.reduce((a, k) => a + map[k].total, 0) / keys.length : 0;
-  const debt = lastDays(7).reduce((a, k) => a + (map[k] ? Math.max(0, goal - map[k].total) : 0), 0);
+  const avgNight = keys.length ? keys.reduce((a, k) => a + map[k].night, 0) / keys.length : 0;
+  const debt = lastDays(7).reduce((a, k) => a + (map[k]?.main ? Math.max(0, goal - map[k].total) : 0), 0);
   const beds = mains.map((s) => bedMinutes(s.start));
   const wakes = mains.map((s) => minutesOfDay(s.end));
   const sd = (std(beds) + std(wakes)) / 2;
+  const naps = all.flatMap((k) => map[k]?.naps ?? []);
   return {
     nights: keys.length,
     avg,
+    avgNight,
     debt,
     consistency: mains.length >= 2 ? Math.round(clamp(100 - sd * 1.1, 0, 100)) : 0,
     avgBed: beds.length ? beds.reduce((a, b) => a + b, 0) / beds.length : null,
     avgWake: wakes.length ? wakes.reduce((a, b) => a + b, 0) / wakes.length : null,
-    avgScore: mains.length ? Math.round(mains.reduce((a, s) => a + sleepScore(s, d.profile.sleepGoal), 0) / mains.length) : 0,
+    avgScore: keys.length ? Math.round(keys.reduce((a, k) => a + sleepScore(map[k].main!, d.profile.sleepGoal, map[k].nap), 0) / keys.length) : 0,
+    naps: naps.length,
+    napAvg: naps.length ? naps.reduce((a, s) => a + sleepMin(s), 0) / naps.length : 0,
   };
 }
 
@@ -245,4 +273,53 @@ export function greeting(): string {
   if (h < 12) return 'Доброе утро';
   if (h < 18) return 'Добрый день';
   return 'Добрый вечер';
+}
+
+/* ===================== Индекс дня ===================== */
+
+export interface DayScore {
+  sleep: number | null; // 0…1, null — нет данных
+  food: number | null;
+  water: number;
+  steps: number;
+  habits: number | null;
+  score: number; // 0…100
+}
+
+/** Насколько день «закрыт»: сон, питание, вода, шаги, привычки */
+export function dayScore(d: Data, day: string): DayScore {
+  const t = dayTargets(d, day);
+  const ns = nightsByDay(d.sleeps)[day];
+  const sleep = ns?.main ? clamp(ns.total / (d.profile.sleepGoal * 60), 0, 1) : null;
+  const eaten = sumMacros(d.food[day] ?? []).kcal;
+  const r = eaten / t.kcal;
+  // попадание в норму ±10% = 100%; и недобор, и перебор снижают оценку
+  const food = eaten === 0 ? null : r <= 1.1 ? clamp(r / 0.9, 0, 1) : clamp(1 - (r - 1.1) * 2, 0, 1);
+  const water = clamp((d.water[day] ?? 0) / t.water, 0, 1);
+  const steps = clamp((d.steps[day] ?? 0) / d.profile.stepGoal, 0, 1);
+  const hp = dayHabitProgress(d, day);
+  const habits = hp.total ? hp.done / hp.total : null;
+  const parts = [sleep ?? 0, food ?? 0, water, steps, ...(habits != null ? [habits] : [])];
+  return { sleep, food, water, steps, habits, score: Math.round((parts.reduce((a, b) => a + b, 0) / parts.length) * 100) };
+}
+
+/** Сколько дней подряд есть хоть одна запись */
+export function activeStreak(d: Data): number {
+  const days = new Set<string>();
+  for (const k in d.food) if (d.food[k].length) days.add(k);
+  for (const k in d.water) if (d.water[k] > 0) days.add(k);
+  for (const k in d.steps) if (d.steps[k] > 0) days.add(k);
+  for (const k in d.habitLog) if (Object.keys(d.habitLog[k]).length) days.add(k);
+  for (const k in d.mood) days.add(k);
+  for (const k in d.weights) days.add(k);
+  for (const s of d.sleeps) days.add(dayKey(s.end));
+  for (const t of d.txns) days.add(t.day);
+  let k = dayKey();
+  if (!days.has(k)) k = addDays(k, -1);
+  let n = 0;
+  while (days.has(k)) {
+    n++;
+    k = addDays(k, -1);
+  }
+  return n;
 }

@@ -1,5 +1,6 @@
 import type { Data } from '../store';
-import { currentWeight, dayHabitProgress, dayTargets, fmtNum, habitBestStreak, linearSlope, nightsByDay, sleepStats, sumMacros } from './calc';
+import { bedMinutes, currentWeight, dayHabitProgress, dayScore, dayTargets, fmtNum, habitBestStreak, isNap, linearSlope, nightsByDay, sleepStats, sumMacros } from './calc';
+import { addMonths, curMonth, fmtMoney, monthStats, trackedFromStart } from './money';
 import { addDays, dayKey, daysBetween, fmtDur, fmtMinutesOfDay, lastDays } from './date';
 
 export interface Insight {
@@ -28,7 +29,7 @@ export function insights(d: Data): Insight[] {
   }
 
   // Связь сна и привычек
-  const days = lastDays(30).filter((k) => nights[k] && dayHabitProgress(d, k).total > 0);
+  const days = lastDays(30).filter((k) => nights[k]?.main && dayHabitProgress(d, k).total > 0);
   if (days.length >= 6) {
     const rate = (ks: string[]) => {
       const t = ks.reduce((a, k) => a + dayHabitProgress(d, k).total, 0);
@@ -91,6 +92,60 @@ export function insights(d: Data): Insight[] {
     });
   }
 
+  // Дневной сон: сдвигает ли он отбой
+  {
+    const withNap: number[] = [];
+    const noNap: number[] = [];
+    for (const k of lastDays(30)) {
+      const m = nights[k]?.main;
+      if (!m) continue;
+      (nights[addDays(k, -1)]?.nap ? withNap : noNap).push(bedMinutes(m.start));
+    }
+    if (withNap.length >= 3 && noNap.length >= 3) {
+      const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+      const shift = Math.round(avg(withNap) - avg(noNap));
+      if (shift >= 20) out.push({ emoji: '😴', title: 'Дневной сон сдвигает отбой', text: `После дневного сна ты ложишься в среднем на ${shift} мин позже. Попробуй спать днём не дольше 20–30 минут и до 15:00.`, tone: 'info' });
+      else if (shift <= 5) out.push({ emoji: '😴', title: 'Дневной сон тебе подходит', text: 'Он не сдвигает ночной отбой. Можно спокойно добирать сон днём.', tone: 'good' });
+    }
+  }
+
+  // Настроение и сон
+  {
+    const good: number[] = [];
+    const bad: number[] = [];
+    for (const k of lastDays(30)) {
+      const mood = d.mood[k];
+      if (mood == null || !nights[k]?.main) continue;
+      (nights[k].total >= goalMin - 30 ? good : bad).push(mood);
+    }
+    if (good.length >= 3 && bad.length >= 3) {
+      const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+      const diff = avg(good) - avg(bad);
+      if (diff >= 0.4) out.push({ emoji: '🙂', title: 'Высыпаешься — и настроение лучше', text: `В дни после нормального сна настроение в среднем ${avg(good).toFixed(1).replace('.', ',')} из 5, после недосыпа — ${avg(bad).toFixed(1).replace('.', ',')}.`, tone: 'info' });
+    }
+  }
+
+  // Деньги
+  {
+    const cur = d.fin.currency;
+    const ms = monthStats(d, curMonth());
+    if (ms.count >= 5 && ms.exp > 0) {
+      const top = ms.byCat[0];
+      if (top && top.share >= 0.25 && ms.byCat.length > 1)
+        out.push({ emoji: top.cat.emoji, title: `${top.cat.label}: ${Math.round(top.share * 100)}% расходов`, text: `На эту категорию ушло ${fmtMoney(top.sum, cur)} в этом месяце. Здесь проще всего найти, на чём сэкономить.`, tone: 'info' });
+      if (d.fin.budget && ms.daysPassed >= 5) {
+        if (ms.forecast > d.fin.budget * 1.05)
+          out.push({ emoji: '💸', title: 'Бюджет под угрозой', text: `При таком темпе к концу месяца потратишь около ${fmtMoney(Math.round(ms.forecast), cur)}: это на ${fmtMoney(Math.round(ms.forecast - d.fin.budget), cur)} больше бюджета.`, tone: 'warn' });
+        else out.push({ emoji: '💰', title: 'Укладываешься в бюджет', text: `Прогноз на месяц: ${fmtMoney(Math.round(ms.forecast), cur)} из ${fmtMoney(d.fin.budget, cur)}.`, tone: 'good' });
+      }
+      const prev = monthStats(d, addMonths(curMonth(), -1));
+      if (prev.exp > 0 && ms.daysPassed >= 10 && trackedFromStart(d, addMonths(curMonth(), -1))) {
+        const diff = (ms.forecast - prev.exp) / prev.exp;
+        if (diff <= -0.1) out.push({ emoji: '📉', title: 'Тратишь меньше', text: `Расходы идут на ${Math.round(-diff * 100)}% ниже прошлого месяца. Разницу можно отправить в копилку.`, tone: 'good' });
+      }
+    }
+  }
+
   if (!out.length) out.push({ emoji: '🌱', title: 'Собираю данные', text: 'Отмечай сон, еду и привычки несколько дней, и здесь появятся персональные выводы.', tone: 'info' });
   return out;
 }
@@ -136,6 +191,7 @@ export function achievements(d: Data): Achievement[] {
   let sleepStreak = 0;
   let best = 0;
   for (const k of nightKeys) {
+    if (!nights[k].main) continue;
     if (nights[k].total >= goal - 15) best = Math.max(best, ++sleepStreak);
     else sleepStreak = 0;
   }
@@ -170,7 +226,7 @@ export function achievements(d: Data): Achievement[] {
 
   const list = [
     a('sleep1', '🌙', 'Первая ночь', 'Записать первый сон', d.sleeps.length, 1),
-    a('sleep7', '🛌', 'Неделя сна', 'Записать 7 ночей', nightKeys.length, 7),
+    a('sleep7', '🛌', 'Неделя сна', 'Записать 7 ночей', nightKeys.filter((k) => nights[k].main).length, 7),
     a('sleepstreak', '👑', 'Король сна', '5 ночей подряд в норме', best, 5),
     a('food1', '🍽️', 'Первый приём', 'Записать еду', foodDays, 1),
     a('food7', '📒', 'Дневник питания', 'Вести дневник 7 дней', foodDays, 7),
@@ -187,6 +243,24 @@ export function achievements(d: Data): Achievement[] {
     a('goal1', '🚀', 'Цель взята', 'Выполнить первую цель', goalsDone, 1),
     a('fast', '⏳', 'Выдержка', 'Завершить голодание по плану', fasts, 1),
   ];
+  // финансы, дневной сон, индекс дня
+  const pastBudgetOk = d.fin.budget
+    ? [1, 2, 3, 4, 5, 6].some((n) => {
+        const ms = monthStats(d, addMonths(curMonth(), -n));
+        return ms.exp > 0 && ms.exp <= d.fin.budget!;
+      })
+    : false;
+  const nowMs = monthStats(d, curMonth());
+  const bestScore = Math.max(0, ...lastDays(45).map((k) => dayScore(d, k).score));
+  list.push(
+    a('money1', '💸', 'Первая трата', 'Записать первую операцию', d.txns.length, 1),
+    a('money30', '🧾', 'Бухгалтер', 'Записать 30 операций', d.txns.length, 30),
+    a('nospend', '🧘', 'Дзен', '5 дней без трат за месяц', nowMs.count ? nowMs.noSpendDays : 0, 5),
+    a('budget', '🎯', 'В бюджете', 'Закончить месяц в рамках бюджета', pastBudgetOk ? 1 : 0, 1),
+    a('pot', '🐷', 'Копилка полна', 'Собрать копилку целиком', d.pots.some((p) => p.saved >= p.target) ? 1 : 0, 1),
+    a('nap5', '😴', 'Сиеста', '5 раз поспать днём', d.sleeps.filter(isNap).length, 5),
+    a('score90', '🏅', 'День на 90+', 'Набрать индекс дня 90 и выше', bestScore, 90),
+  );
   if (d.profile.goal === 'lose') {
     list.push(a('lose1', '📉', 'Минус 1', 'Сбросить 1 кг', Math.max(0, lost), 1));
     list.push(a('lose5', '🥇', 'Минус 5', 'Сбросить 5 кг', Math.max(0, lost), 5));
@@ -200,7 +274,7 @@ export function achievements(d: Data): Achievement[] {
 export function periodSummary(d: Data, days: number) {
   const keys = lastDays(days);
   const nights = nightsByDay(d.sleeps);
-  const sl = keys.filter((k) => nights[k]);
+  const sl = keys.filter((k) => nights[k]?.main);
   const fed = keys.filter((k) => (d.food[k] ?? []).length > 0 && k !== dayKey());
   const st = keys.filter((k) => (d.steps[k] ?? 0) > 0);
   const hab = keys.map((k) => dayHabitProgress(d, k)).filter((p) => p.total > 0);

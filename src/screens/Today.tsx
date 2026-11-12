@@ -1,24 +1,35 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import type { Tab } from '../App';
-import { currentWeight, dayHabitProgress, dayTargets, fmtNum, greeting, isScheduled, nightsByDay, round1, scoreLabel, sleepScore, stepsKm, sumMacros, wakeTimesFrom } from '../lib/calc';
+import { activeStreak, currentWeight, dayHabitProgress, dayScore, dayTargets, fmtNum, greeting, isScheduled, nightsByDay, round1, scoreLabel, sleepScore, stepsKm, sumMacros, wakeTimesFrom } from '../lib/calc';
 import { addDays, dayKey, fmtDur, fmtMinutesOfDay, fmtTime, longDate, minutesOfDay } from '../lib/date';
+import { allowance, daySpent, fmtMoney } from '../lib/money';
 import { haptic } from '../lib/telegram';
 import { tipOfDay } from '../lib/insights';
 import { Icon } from '../components/Icon';
-import { Bar, CountUp, Ring, toast, useNow } from '../components/ui';
+import { ActivityRings, Bar, CountUp, Ring, toast, useNow } from '../components/ui';
 import { HabitRow } from '../components/HabitRow';
 import { WaterCard } from '../components/widgets';
 import { AddFoodSheet } from '../components/FoodSheets';
-import { SettingsSheet, SleepEditSheet, SleepRateSheet, StepsSheet, WeightSheet } from '../components/sheets';
+import { TxnSheet } from '../components/MoneySheets';
+import { NapSheet, SettingsSheet, SleepEditSheet, SleepRateSheet, StepsSheet, WeightSheet } from '../components/sheets';
 
 const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
+const Q = ['😫', '😕', '😐', '🙂', '🤩'];
+
+function scorePhrase(v: number) {
+  if (v >= 100) return 'Идеальный день! 🏆';
+  if (v >= 85) return 'Почти идеально 🔥';
+  if (v >= 60) return 'Отличный темп';
+  if (v >= 30) return 'Хороший старт';
+  return 'День только начинается';
+}
 
 export function Today({ go }: { go: (t: Tab) => void }) {
   const s = useStore();
   const now = useNow(30_000);
   const today = dayKey();
-  const [sheet, setSheet] = useState<null | 'food' | 'steps' | 'weight' | 'settings' | 'sleep'>(null);
+  const [sheet, setSheet] = useState<null | 'food' | 'steps' | 'weight' | 'settings' | 'sleep' | 'nap' | 'money' | 'napManual'>(null);
   const [rateId, setRateId] = useState<string | null>(null);
 
   const t = dayTargets(s, today);
@@ -28,6 +39,7 @@ export function Today({ go }: { go: (t: Tab) => void }) {
   const habits = s.habits.filter((h) => !h.archived && isScheduled(h, today));
   const hp = dayHabitProgress(s, today);
   const steps = s.steps[today] ?? 0;
+
   const w = currentWeight(s);
   const wkAgo = Object.keys(s.weights)
     .sort()
@@ -37,31 +49,156 @@ export function Today({ go }: { go: (t: Tab) => void }) {
   const tip = tipOfDay();
   const hour = new Date(now).getHours();
   const evening = hour >= 20 || hour < 4;
+  const ds = dayScore(s, today);
+  const streak = activeStreak(s);
+  const al = allowance(s);
+  const spent = daySpent(s, today);
+  const cur = s.fin.currency;
+  const napping = s.sleepStart != null && s.sleepKind === 'nap';
+  // now обновляется раз в несколько секунд, поэтому сразу после старта берём свежее время
+  const elapsed = s.sleepStart ? Math.max(0, (Math.max(now, Date.now()) - s.sleepStart) / 60000) : 0;
+
+  const wake = () => {
+    const wasNap = napping;
+    const id = s.endSleep();
+    haptic.success();
+    if (!id) return toast('Слишком короткий сон, не записал');
+    if (wasNap) toast('😴 Дневной сон записан');
+    else setRateId(id);
+  };
+
+  const legend: { e: string; l: string; v: string; c: string; tab: Tab }[] = [
+    { e: '😴', l: 'Сон', v: night?.main ? fmtDur(night.total) : '—', c: 'var(--sleep)', tab: 'sleep' },
+    { e: '🍎', l: 'Еда', v: `${fmtNum(eaten.kcal)} / ${fmtNum(t.kcal)}`, c: 'var(--food)', tab: 'food' },
+    { e: '👟', l: 'Шаги', v: fmtNum(steps), c: 'var(--steps)', tab: 'progress' },
+    { e: '✅', l: 'Привычки', v: hp.total ? `${hp.done} из ${hp.total}` : '—', c: 'var(--habit)', tab: 'habits' },
+  ];
 
   return (
     <div className="screen stack">
       <div className="page-head">
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div className="page-title" style={{ fontSize: 25 }}>
             {greeting()}
             {s.profile.name ? `, ${s.profile.name}` : ''} 👋
           </div>
           <div className="page-sub">{longDate()}</div>
         </div>
-        <button className="icon-btn" onClick={() => (haptic.light(), setSheet('settings'))} aria-label="Настройки">
-          <Icon name="settings" />
+        <div className="row" style={{ gap: 8 }}>
+          {streak > 1 && (
+            <button className="streak" onClick={() => toast(`🔥 ${streak} дней подряд с записями. Не прерывай серию!`)}>
+              <Icon name="flame" size={15} /> {streak}
+            </button>
+          )}
+          <button className="icon-btn" onClick={() => (haptic.light(), setSheet('settings'))} aria-label="Настройки">
+            <Icon name="settings" />
+          </button>
+        </div>
+      </div>
+
+      {/* ---------- Индекс дня ---------- */}
+      <div className="card hero-day">
+        <div className="row" style={{ gap: 16 }}>
+          <ActivityRings
+            size={148}
+            stroke={12}
+            rings={[
+              { value: ds.sleep ?? 0, colors: ['#a99dff', '#6f8dff'] },
+              { value: ds.food ?? 0, colors: ['#ffb057', '#ff6b6b'] },
+              { value: ds.steps, colors: ['#4fb4ff', '#7c6cff'] },
+              { value: ds.habits ?? 0, colors: ['#3fe0b0', '#19b3d6'] },
+            ]}
+          >
+            <div className="num" style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>
+              <CountUp value={ds.score} />
+            </div>
+            <div className="tiny muted bold">из 100</div>
+          </ActivityRings>
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="tiny bold" style={{ color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+              Индекс дня
+            </div>
+            <div className="bold" style={{ fontSize: 16, marginBottom: 6 }}>
+              {scorePhrase(ds.score)}
+            </div>
+            {legend.map((x) => (
+              <button key={x.l} className="legend-row" onClick={() => go(x.tab)}>
+                <i className="dot" style={{ background: x.c }} />
+                <span className="muted">{x.l}</span>
+                <span className="grow" />
+                <span className="bold num">{x.v}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ---------- Быстрые действия ---------- */}
+      <div className="chips quick">
+        <button className="chip" onClick={() => (haptic.light(), setSheet('food'))}>
+          🍽️ Еда
+        </button>
+        <button
+          className="chip"
+          onClick={() => {
+            s.addWater(today, s.profile.glass);
+            haptic.light();
+            toast(`💧 +${s.profile.glass} мл`, { label: 'Отменить', fn: () => useStore.getState().addWater(today, -s.profile.glass) });
+          }}
+        >
+          💧 Вода
+        </button>
+        <button className="chip" onClick={() => (haptic.light(), setSheet('money'))}>
+          💸 Трата
+        </button>
+        <button className="chip" onClick={() => (haptic.light(), setSheet('steps'))}>
+          👟 Шаги
+        </button>
+        {!s.sleepStart && !evening && (
+          <button className="chip" onClick={() => (haptic.light(), setSheet('nap'))}>
+            😴 Вздремнуть
+          </button>
+        )}
+        <button className="chip" onClick={() => (haptic.light(), setSheet('weight'))}>
+          ⚖️ Вес
         </button>
       </div>
 
       {/* ---------- Сон ---------- */}
-      {s.sleepStart ? (
+      {s.sleepStart && napping ? (
+        <div className="card hero-nap">
+          <div className="row-between">
+            <div>
+              <div className="small bold" style={{ opacity: 0.9 }}>
+                😴 Дневной сон с {fmtTime(s.sleepStart)}
+              </div>
+              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-0.03em' }} className="num">
+                {Math.floor(elapsed)} мин{s.napTarget ? <span style={{ fontSize: 15, opacity: 0.8 }}> из {s.napTarget}</span> : null}
+              </div>
+              {s.napTarget != null && (
+                <div className="tiny bold" style={{ opacity: 0.9 }}>
+                  {elapsed >= s.napTarget ? '⏰ Пора вставать!' : `Подъём в ${fmtTime(s.sleepStart + s.napTarget * 60_000)}`}
+                </div>
+              )}
+            </div>
+            <button className="btn white sm" style={{ color: '#b45309', height: 44 }} onClick={wake}>
+              ☀️ Проснулся
+            </button>
+          </div>
+          {s.napTarget != null && (
+            <div className="bar" style={{ marginTop: 12, background: 'rgba(255,255,255,.25)' }}>
+              <i style={{ width: `${Math.min(100, (elapsed / s.napTarget) * 100)}%`, ['--c' as string]: '#fff' }} />
+            </div>
+          )}
+        </div>
+      ) : s.sleepStart ? (
         <div className="card hero-sleep">
           <div className="stars" />
           <div className="row-between" style={{ position: 'relative' }}>
             <div>
               <div className="small muted bold">🌙 Спишь с {fmtTime(s.sleepStart)}</div>
               <div style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-0.03em' }} className="num">
-                {fmtDur((now - s.sleepStart) / 60000)}
+                {fmtDur(elapsed)}
               </div>
               <div className="tiny muted">
                 Лучше встать в{' '}
@@ -77,32 +214,25 @@ export function Today({ go }: { go: (t: Tab) => void }) {
             <button className="btn glass sm" onClick={() => (s.cancelSleep(), haptic.soft(), toast('Отменено'))}>
               Отмена
             </button>
-            <button
-              className="btn white"
-              style={{ height: 44 }}
-              onClick={() => {
-                const id = s.endSleep();
-                haptic.success();
-                if (id) setRateId(id);
-              }}
-            >
+            <button className="btn white" style={{ height: 44 }} onClick={wake}>
               ☀️ Я проснулся
             </button>
           </div>
         </div>
-      ) : night ? (
+      ) : night?.main ? (
         <button className="card tap" style={{ textAlign: 'left' }} onClick={() => go('sleep')}>
           <div className="row" style={{ gap: 14 }}>
             <Ring value={night.total / (s.profile.sleepGoal * 60)} size={64} stroke={7} colors={['var(--sleep)', 'var(--sleep-2)']}>
-              <span style={{ fontSize: 20 }}>{night.main.quality ? ['😫', '😕', '😐', '🙂', '🤩'][night.main.quality - 1] : '😴'}</span>
+              <span style={{ fontSize: 20 }}>{night.main.quality ? Q[night.main.quality - 1] : '😴'}</span>
             </Ring>
             <div className="grow">
               <div className="small muted bold">Сон этой ночью</div>
               <div style={{ fontSize: 22, fontWeight: 800 }} className="num">
-                {fmtDur(night.total)}
+                {fmtDur(night.night)}
+                {night.nap > 0 && <span className="small" style={{ color: 'var(--nap)' }}> +{fmtDur(night.nap)} днём</span>}
               </div>
               <div className="tiny muted num">
-                {fmtTime(night.main.start)} → {fmtTime(night.main.end)} · {scoreLabel(sleepScore(night.main, s.profile.sleepGoal))} {sleepScore(night.main, s.profile.sleepGoal)}/100
+                {fmtTime(night.main.start)} → {fmtTime(night.main.end)} · {scoreLabel(sleepScore(night.main, s.profile.sleepGoal, night.nap))} {sleepScore(night.main, s.profile.sleepGoal, night.nap)}/100
               </div>
             </div>
             {evening ? (
@@ -129,8 +259,8 @@ export function Today({ go }: { go: (t: Tab) => void }) {
           {evening && <div className="stars" />}
           <div className="row-between" style={{ position: 'relative' }}>
             <div>
-              <div className="card-title">{evening ? 'Пора отдыхать?' : 'Как спалось?'}</div>
-              <div className="small muted">{evening ? 'Нажми, когда ложишься. Утром нажмёшь «Проснулся»' : 'Добавь сон, чтобы видеть статистику'}</div>
+              <div className="card-title">{evening ? 'Пора отдыхать?' : night?.nap ? `Днём поспал ${fmtDur(night.nap)}` : 'Как спалось?'}</div>
+              <div className="small muted">{evening ? 'Нажми, когда ложишься. Утром нажмёшь «Проснулся»' : 'Добавь ночной сон, чтобы видеть статистику'}</div>
             </div>
             <div style={{ fontSize: 36 }}>{evening ? '🌙' : '🛌'}</div>
           </div>
@@ -156,19 +286,13 @@ export function Today({ go }: { go: (t: Tab) => void }) {
       {/* ---------- Калории ---------- */}
       <div className="card card-glow tap" style={{ ['--glow' as string]: 'var(--food)' }} onClick={() => go('food')}>
         <div className="row" style={{ gap: 16 }}>
-          <Ring value={eaten.kcal / t.kcal} size={128} stroke={13} colors={left < 0 ? ['var(--bad)', 'var(--food-2)'] : ['var(--food)', 'var(--food-2)']}>
-            <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1 }} className="num">
+          <Ring value={eaten.kcal / t.kcal} size={112} stroke={12} colors={left < 0 ? ['var(--bad)', 'var(--food-2)'] : ['var(--food)', 'var(--food-2)']}>
+            <div style={{ fontSize: 23, fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1 }} className="num">
               <CountUp value={Math.abs(left)} />
             </div>
             <div className="tiny muted bold">{left >= 0 ? 'ккал осталось' : 'ккал сверху'}</div>
           </Ring>
           <div className="grow stack-sm">
-            <div className="row-between">
-              <span className="small muted bold">Съедено</span>
-              <span className="small bold num">
-                {fmtNum(eaten.kcal)} / {fmtNum(t.kcal)}
-              </span>
-            </div>
             {(
               [
                 ['Белки', eaten.p, t.p, 'var(--protein)'],
@@ -227,6 +351,41 @@ export function Today({ go }: { go: (t: Tab) => void }) {
             {steps ? 'Обновить' : 'Ввести шаги'}
           </span>
         </button>
+      </div>
+
+      {/* ---------- Деньги ---------- */}
+      <div className="card tap" onClick={() => go('money')}>
+        <div className="row" style={{ gap: 12 }}>
+          <div className="emoji-box" style={{ background: 'color-mix(in srgb, var(--money) 18%, transparent)' }}>
+            💸
+          </div>
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="small muted bold">{al ? (al.todayLeft >= 0 ? 'Сегодня можно потратить ещё' : 'Перерасход за сегодня') : 'Потрачено сегодня'}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: al && al.todayLeft < 0 ? 'var(--bad)' : undefined }} className="num">
+              {fmtMoney(al ? Math.abs(Math.round(al.todayLeft)) : spent, cur)}
+            </div>
+          </div>
+          <button
+            className="btn sm"
+            style={{ ['--c1' as string]: 'var(--money)', ['--c2' as string]: 'var(--money-2)', color: '#0b2a12' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              haptic.light();
+              setSheet('money');
+            }}
+          >
+            <Icon name="plus" size={16} stroke={2.6} /> Трата
+          </button>
+        </div>
+        {al && (
+          <div style={{ marginTop: 10 }}>
+            <Bar value={al.todaySpent / Math.max(1, al.perDay)} color={al.todayLeft < 0 ? 'var(--bad)' : 'linear-gradient(90deg, var(--money), var(--money-2))'} className="thin" />
+            <div className="row-between tiny muted bold" style={{ marginTop: 4 }}>
+              <span>потрачено {fmtMoney(al.todaySpent, cur)}</span>
+              <span>лимит дня {fmtMoney(Math.round(al.perDay), cur)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ---------- Привычки ---------- */}
@@ -304,8 +463,11 @@ export function Today({ go }: { go: (t: Tab) => void }) {
       <StepsSheet open={sheet === 'steps'} onClose={() => setSheet(null)} day={today} />
       <WeightSheet open={sheet === 'weight'} onClose={() => setSheet(null)} />
       <SettingsSheet open={sheet === 'settings'} onClose={() => setSheet(null)} />
-      <SleepEditSheet open={sheet === 'sleep'} onClose={() => setSheet(null)} />
+      <SleepEditSheet open={sheet === 'sleep' || sheet === 'napManual'} nap={sheet === 'napManual'} onClose={() => setSheet(null)} />
+      <NapSheet open={sheet === 'nap'} onClose={() => setSheet(null)} onManual={() => setSheet('napManual')} />
+      <TxnSheet open={sheet === 'money'} onClose={() => setSheet(null)} />
       <SleepRateSheet id={rateId} onClose={() => setRateId(null)} />
     </div>
   );
 }
+

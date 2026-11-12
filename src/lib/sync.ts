@@ -7,11 +7,35 @@ import { cloudLoad, cloudSave } from './telegram';
 const TS_KEY = 'ritm-updated';
 let applyingRemote = false;
 let timer: number | undefined;
+let saving = false;
+let dirty = false;
+
+/** Отправки идут строго по одной: иначе куски двух версий могут перемешаться */
+async function flush() {
+  if (saving) {
+    dirty = true;
+    return;
+  }
+  saving = true;
+  try {
+    do {
+      dirty = false;
+      const ts = Number(localStorage.getItem(TS_KEY)) || Date.now();
+      await cloudSave(JSON.stringify(pickData(useStore.getState())), ts);
+    } while (dirty);
+  } catch {
+    /* нет связи — отправим при следующем изменении */
+  } finally {
+    saving = false;
+  }
+}
 
 export async function startSync() {
   const localTs = Number(localStorage.getItem(TS_KEY) || 0);
   const remote = await cloudLoad();
-  if (remote && remote.ts > localTs) {
+  // если пользователь уже что-то изменил, пока грузилось облако, — его правки важнее
+  const changedMeanwhile = Number(localStorage.getItem(TS_KEY) || 0) !== localTs;
+  if (remote && remote.ts > localTs && !changedMeanwhile) {
     try {
       const data = JSON.parse(remote.json) as Partial<Data>;
       applyingRemote = true;
@@ -23,14 +47,12 @@ export async function startSync() {
       applyingRemote = false;
     }
   }
-
-  useStore.subscribe(() => {
-    if (applyingRemote) return;
-    const ts = Date.now();
-    localStorage.setItem(TS_KEY, String(ts));
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      cloudSave(JSON.stringify(pickData(useStore.getState())), ts).catch(() => undefined);
-    }, 1500);
-  });
 }
+
+// подписка ставится сразу, а не после ответа облака, чтобы не потерять первые правки
+useStore.subscribe(() => {
+  if (applyingRemote) return;
+  localStorage.setItem(TS_KEY, String(Date.now()));
+  window.clearTimeout(timer);
+  timer = window.setTimeout(flush, 1500);
+});

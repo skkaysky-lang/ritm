@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { currentWeight, fmtNum, linearSlope, movingAvg, stepsKcal, stepsKm } from '../lib/calc';
+import { currentWeight, dayScore, fmtNum, linearSlope, movingAvg, stepsKcal, stepsKm } from '../lib/calc';
+import { fmtMoney } from '../lib/money';
 import { addDays, dayKey, daysBetween, fmtDur, fromKey, humanDay, lastDays, MONTHS_GEN, WD, weekday } from '../lib/date';
 import { haptic } from '../lib/telegram';
 import { achievements, insights, periodSummary } from '../lib/insights';
@@ -17,6 +18,12 @@ export function Progress() {
   const n = Number(period);
   const today = dayKey();
   const sum = periodSummary(s, n);
+  const periodDays = lastDays(n);
+  const spent = s.txns.reduce((a, t) => (t.type === 'exp' && t.day >= periodDays[0] ? a + t.amount : a), 0);
+  const scores = periodDays.map((k) => dayScore(s, k).score).filter((v) => v > 0);
+  const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+  const moodDays = lastDays(n === 7 ? 7 : 14);
+  const moods = moodDays.map((k) => s.mood[k]).filter((m): m is number => m != null);
 
   /* --- шаги --- */
   const stepsToday = s.steps[today] ?? 0;
@@ -56,7 +63,7 @@ export function Progress() {
     <div className="screen stack">
       <div className="page-head">
         <div>
-          <div className="page-title">Прогресс</div>
+          <div className="page-title">Итоги</div>
           <div className="page-sub">Как идут дела</div>
         </div>
         <div style={{ width: 150 }}>
@@ -79,6 +86,8 @@ export function Progress() {
             ['🍎', 'Калорий в день', sum.kcal ? fmtNum(sum.kcal) : '—', 'var(--food)'],
             ['👟', 'Шагов в день', sum.steps ? fmtNum(sum.steps) : '—', 'var(--steps)'],
             ['✅', 'Привычек выполнено', sum.habits ? `${Math.round(sum.habits * 100)}%` : '—', 'var(--habit)'],
+            ['💸', 'Потрачено за период', spent ? fmtMoney(Math.round(spent), s.fin.currency) : '—', 'var(--money)'],
+            ['🏅', 'Средний индекс дня', avgScore ? `${avgScore} из 100` : '—', 'var(--accent)'],
           ] as const
         ).map(([e, l, v, c]) => (
           <div key={l} className="card tight card-glow" style={{ ['--glow' as string]: c }}>
@@ -227,6 +236,32 @@ export function Progress() {
           </div>
         )}
       </div>
+
+      {/* ---------- Настроение ---------- */}
+      {moods.length > 0 && (
+        <div className="card stack">
+          <div className="row-between">
+            <div className="card-title">🙂 Настроение</div>
+            <span className="small muted bold">
+              в среднем {(moods.reduce((a, b) => a + b, 0) / moods.length).toFixed(1).replace('.', ',')} из 5
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${moodDays.length}, 1fr)`, gap: 3 }}>
+            {moodDays.map((k) => {
+              const m = s.mood[k];
+              return (
+                <div key={k} className="center">
+                  <div style={{ height: 56, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                    <div style={{ width: '68%', height: m ? `${m * 20}%` : 3, borderRadius: 5, background: m ? ['#ff5d6c', '#ff9f43', '#ffc04d', '#8bd346', '#2fd3a4'][m - 1] : 'var(--surface-3)', transition: 'height .5s' }} />
+                  </div>
+                  <div style={{ fontSize: moodDays.length === 7 ? 17 : 11, height: 22, lineHeight: '22px' }}>{m ? ['😞', '😕', '😐', '🙂', '😄'][m - 1] : '·'}</div>
+                  <div className="tiny faint bold">{moodDays.length === 7 ? WD[weekday(k)] : Number(k.slice(8))}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ---------- Выводы ---------- */}
       <div className="section-title">Выводы</div>

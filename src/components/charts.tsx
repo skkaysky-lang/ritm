@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useWidth } from './ui';
 import { haptic } from '../lib/telegram';
 import { addDays, dayKey, fmtMinutesOfDay, weekday } from '../lib/date';
@@ -10,6 +10,7 @@ export interface BarDatum {
   label: string;
   value: number;
   color?: string;
+  extra?: number; // вторая часть столбика поверх основной (например, дневной сон)
 }
 
 export function Bars({
@@ -20,6 +21,7 @@ export function Bars({
   height = 140,
   format = (v) => String(Math.round(v)),
   goalLabel,
+  extraColor = 'var(--water)',
 }: {
   data: BarDatum[];
   goal?: number;
@@ -28,9 +30,10 @@ export function Bars({
   height?: number;
   format?: (v: number) => ReactNode;
   goalLabel?: string;
+  extraColor?: string;
 }) {
   const [sel, setSel] = useState<number | null>(null);
-  const max = Math.max(goal ?? 0, ...data.map((d) => d.value), 1) * 1.12;
+  const max = Math.max(goal ?? 0, ...data.map((d) => d.value + (d.extra ?? 0)), 1) * 1.12;
   const many = data.length > 14;
   const showLabel = (i: number) => !many || i % Math.ceil(data.length / 7) === (data.length - 1) % Math.ceil(data.length / 7);
   const active = sel != null ? data[sel] : null;
@@ -40,7 +43,7 @@ export function Bars({
         {active ? (
           <>
             <span className="muted bold">{active.label}</span>
-            <span className="bold num">{format(active.value)}</span>
+            <span className="bold num">{format(active.value + (active.extra ?? 0))}</span>
           </>
         ) : (
           <span className="faint tiny">Нажми на столбик, чтобы увидеть значение</span>
@@ -59,6 +62,7 @@ export function Bars({
         <div style={{ display: 'flex', alignItems: 'flex-end', height: '100%', gap: many ? 2 : 7 }}>
           {data.map((d, i) => {
             const h = d.value > 0 ? Math.max(3, (d.value / max) * 100) : 0;
+            const he = d.extra ? Math.max(2, (d.extra / max) * 100) : 0;
             const isSel = sel === i;
             return (
               <button
@@ -67,9 +71,10 @@ export function Bars({
                   haptic.select();
                   setSel(isSel ? null : i);
                 }}
-                style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'flex-end', minWidth: 0 }}
+                style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: he ? 2 : 0, minWidth: 0 }}
                 aria-label={`${d.label}: ${d.value}`}
               >
+                {he > 0 && <div style={{ width: '100%', height: `${he}%`, borderRadius: many ? 3 : 6, background: extraColor, opacity: sel == null || isSel ? 0.9 : 0.35, transition: 'height .6s cubic-bezier(.3,.9,.3,1), opacity .2s' }} />}
                 <div
                   style={{
                     width: '100%',
@@ -312,6 +317,71 @@ export function Heatmap({ weeks = 17, value, color }: { weeks?: number; value: (
           }}
         />
       ))}
+    </div>
+  );
+}
+
+/* ===================== Кольцевая диаграмма ===================== */
+
+export function Donut({
+  segments,
+  size = 168,
+  stroke = 22,
+  selected,
+  onSelect,
+  children,
+}: {
+  segments: { key: string; value: number; color: string }[];
+  size?: number;
+  stroke?: number;
+  selected?: string | null;
+  onSelect?: (key: string | null) => void;
+  children?: ReactNode;
+}) {
+  const r = (size - stroke) / 2 - 3;
+  const c = 2 * Math.PI * r;
+  const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const t = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(t);
+  }, []);
+  const gap = segments.length > 1 ? 3 : 0;
+  let acc = 0;
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth={stroke} />
+        {segments.map((s) => {
+          const len = (s.value / total) * c;
+          const start = (acc / total) * c;
+          acc += s.value;
+          const dash = shown ? Math.max(0.5, len - gap) : 0;
+          const isSel = selected === s.key;
+          return (
+            <circle
+              key={s.key}
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={isSel ? stroke + 6 : stroke}
+              strokeDasharray={`${dash} ${c - dash}`}
+              strokeDashoffset={shown ? -start : 0}
+              opacity={selected && !isSel ? 0.35 : 1}
+              style={{ transition: 'stroke-dasharray .8s cubic-bezier(.3,.9,.3,1), stroke-dashoffset .8s cubic-bezier(.3,.9,.3,1), opacity .2s, stroke-width .2s', pointerEvents: 'stroke', cursor: 'pointer' }}
+              onClick={() => {
+                haptic.select();
+                onSelect?.(isSel ? null : s.key);
+              }}
+            />
+          );
+        })}
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', pointerEvents: 'none', padding: stroke + 10 }}>
+        {children}
+      </div>
     </div>
   );
 }

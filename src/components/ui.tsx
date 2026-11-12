@@ -507,3 +507,64 @@ export function CountUp({ value, format = (v: number) => Math.round(v).toLocaleS
   }, [value]);
   return <>{format(v)}</>;
 }
+
+/* ===================== Кольца активности (несколько колец одно в другом) ===================== */
+
+export function ActivityRings({
+  rings,
+  size = 150,
+  stroke = 13,
+  gap = 4,
+  children,
+}: {
+  rings: { value: number; colors: [string, string] }[];
+  size?: number;
+  stroke?: number;
+  gap?: number;
+  children?: ReactNode;
+}) {
+  const id = useId().replace(/:/g, '');
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const t = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(t);
+  }, []);
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <defs>
+          {rings.map((r, i) => (
+            <linearGradient key={i} id={`${id}-${i}`} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={r.colors[0]} />
+              <stop offset="100%" stopColor={r.colors[1]} />
+            </linearGradient>
+          ))}
+        </defs>
+        {rings.map((ring, i) => {
+          const r = (size - stroke) / 2 - i * (stroke + gap);
+          const c = 2 * Math.PI * r;
+          const v = shown ? Math.max(0, Math.min(1, ring.value)) : 0;
+          return (
+            <g key={i}>
+              <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={ring.colors[0]} strokeOpacity={0.16} strokeWidth={stroke} />
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="none"
+                stroke={`url(#${id}-${i})`}
+                strokeWidth={stroke}
+                strokeLinecap="round"
+                strokeDasharray={c}
+                strokeDashoffset={c * (1 - v)}
+                opacity={v > 0.001 ? 1 : 0}
+                style={{ transition: `stroke-dashoffset 1s cubic-bezier(.3,.9,.3,1) ${i * 0.08}s` }}
+              />
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>{children}</div>
+    </div>
+  );
+}

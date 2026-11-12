@@ -102,18 +102,30 @@ function cs<T>(method: string, ...args: unknown[]): Promise<T> {
   });
 }
 
+// что мы сами отправили в прошлый раз — чтобы не переписывать неизменившиеся куски
+let sentChunks: string[] = [];
+let sentTs = '';
+
 export async function cloudSave(json: string, ts: number): Promise<void> {
   if (!cloudOk()) return;
   const parts: string[] = [];
   for (let i = 0; i < json.length; i += CHUNK) parts.push(json.slice(i, i + CHUNK));
   const prev = Number((await cs<string>('getItem', 'n').catch(() => '0')) || 0);
-  for (let i = 0; i < parts.length; i++) await cs('setItem', `c${i}`, parts[i]);
+  // пропускать куски можно, только если в облаке лежит именно наша прошлая запись
+  const remoteTs = await cs<string>('getItem', 't').catch(() => '');
+  const mine = sentTs !== '' && remoteTs === sentTs;
+  for (let i = 0; i < parts.length; i++) {
+    if (mine && sentChunks[i] === parts[i]) continue;
+    await cs('setItem', `c${i}`, parts[i]);
+  }
   if (prev > parts.length) {
     const stale = Array.from({ length: prev - parts.length }, (_, i) => `c${parts.length + i}`);
     await cs('removeItems', stale).catch(() => undefined);
   }
   await cs('setItem', 'n', String(parts.length));
   await cs('setItem', 't', String(ts));
+  sentChunks = parts;
+  sentTs = String(ts);
 }
 
 export async function cloudLoad(): Promise<{ json: string; ts: number } | null> {
