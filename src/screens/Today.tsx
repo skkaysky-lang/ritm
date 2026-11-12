@@ -18,7 +18,7 @@ const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
 const Q = ['😫', '😕', '😐', '🙂', '🤩'];
 
 function scorePhrase(v: number) {
-  if (v >= 100) return 'Идеальный день! 🏆';
+  if (v >= 100) return 'Идеальный день!';
   if (v >= 85) return 'Почти идеально 🔥';
   if (v >= 60) return 'Отличный темп';
   if (v >= 30) return 'Хороший старт';
@@ -101,7 +101,8 @@ export function Today({ go }: { go: (t: Tab) => void }) {
         <div className="row" style={{ gap: 16 }}>
           <ActivityRings
             size={148}
-            stroke={12}
+            stroke={10}
+            gap={3}
             rings={[
               { value: ds.sleep ?? 0, colors: ['#a99dff', '#6f8dff'] },
               { value: ds.food ?? 0, colors: ['#ffb057', '#ff6b6b'] },
@@ -109,14 +110,14 @@ export function Today({ go }: { go: (t: Tab) => void }) {
               { value: ds.habits ?? 0, colors: ['#3fe0b0', '#19b3d6'] },
             ]}
           >
-            <div className="num" style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>
+            {/* в центре только число: «из 100» вынесено в заголовок, чтобы не налезать на кольца */}
+            <div className="num" style={{ fontSize: ds.score >= 100 ? 18 : 22, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.03em' }}>
               <CountUp value={ds.score} />
             </div>
-            <div className="tiny muted bold">из 100</div>
           </ActivityRings>
           <div className="grow" style={{ minWidth: 0 }}>
             <div className="tiny bold" style={{ color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
-              Индекс дня
+              Индекс дня · {ds.score} из 100
             </div>
             <div className="bold" style={{ fontSize: 16, marginBottom: 6 }}>
               {scorePhrase(ds.score)}
